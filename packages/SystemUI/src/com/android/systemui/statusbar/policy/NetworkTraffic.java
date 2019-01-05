@@ -315,7 +315,7 @@ public class NetworkTraffic extends TextView implements StatusIconDisplayable {
 
     @Override
     public void onDarkChanged(Rect area, float darkIntensity, int tint) {
-        if (mColorIsStatic) {
+        if (mColorIsStatic || !DarkIconDispatcher.isInArea(area, this)) {
             return;
         }
         mTintColor = DarkIconDispatcher.getTint(area, this, tint);
