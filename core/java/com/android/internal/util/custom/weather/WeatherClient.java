@@ -29,6 +29,7 @@ import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Process;
+import android.os.SystemProperties;
 import android.util.Log;
 
 import java.util.ArrayList;
@@ -60,6 +61,8 @@ public class WeatherClient {
             COLUMN_TEMPERATURE_IMPERIAL
     };
 
+    private boolean mBootAndUnlockDone;
+
     private static final int WEATHER_UPDATE_INTERVAL = 60 * 20 * 1000; // 20 minutes
     private String updateIntentAction;
     private PendingIntent pendingWeatherUpdate;
@@ -82,11 +85,13 @@ public class WeatherClient {
                 onScreenOff();
             } else if (Intent.ACTION_SCREEN_ON.equals(intent.getAction())) {
                 onScreenOn();
-            } else if (Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction()) || updateIntentAction.equals(intent.getAction())) {
-                updateWeatherAndNotify();
+            } else if (Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction())) {
+                mBootAndUnlockDone = true;
+                updateWeatherAndNotify(false);
+            } else if (updateIntentAction.equals(intent.getAction())) {
+                updateWeatherAndNotify(false);
             } else if (Intent.ACTION_TIME_CHANGED.equals(intent.getAction()) || Intent.ACTION_TIMEZONE_CHANGED.equals(intent.getAction())) {
-                resetScheduledAlarm();
-                updateWeatherAndNotify();
+                updateWeatherAndNotify(true);
             }
         }
     };
@@ -106,17 +111,9 @@ public class WeatherClient {
         filter.addAction(updateIntentAction);
         filter.setPriority(IntentFilter.SYSTEM_HIGH_PRIORITY);
         mContext.registerReceiver(weatherReceiver, filter);
-    }
-
-    public static boolean isAvailable(Context context) {
-        final PackageManager pm = context.getPackageManager();
-        try {
-            pm.getPackageInfo(SERVICE_PACKAGE, PackageManager.GET_ACTIVITIES);
-            int enabled = pm.getApplicationEnabledSetting(SERVICE_PACKAGE);
-            return enabled != PackageManager.COMPONENT_ENABLED_STATE_DISABLED &&
-                    enabled != PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER;
-        } catch (PackageManager.NameNotFoundException e) {
-            return false;
+        // check if this is a SystemUI restart and boot was already completed
+        if ("1".equals(SystemProperties.get("sys.boot_completed"))) {
+            mBootAndUnlockDone = true;
         }
     }
 
@@ -125,8 +122,11 @@ public class WeatherClient {
         return r.nextInt((20000000 - 10000000) + 1) + 10000000;
     }
 
-    private void updateWeatherAndNotify() {
-        if (isRunning){
+    private void updateWeatherAndNotify(boolean forceResetSchedule) {
+        if (!mBootAndUnlockDone) return;
+
+        if (isRunning) {
+            if (forceResetSchedule) resetScheduledAlarm();
             return;
         }
         isRunning = true;
@@ -154,7 +154,7 @@ public class WeatherClient {
     }
 
     private void onScreenOn() {
-        if (isScreenOn){
+        if (!mBootAndUnlockDone || isScreenOn){
             return;
         }
         if (DEBUG) Log.d(TAG, "onScreenOn");
@@ -162,7 +162,7 @@ public class WeatherClient {
         if (!isRunning) {
             if (needsUpdate()) {
                 if (DEBUG) Log.d(TAG, "Needs update, triggering updateWeatherAndNotify");
-                updateWeatherAndNotify();
+                updateWeatherAndNotify(false);
             } else {
                 if (DEBUG) Log.d(TAG, "Scheduling update");
                 scheduleWeatherUpdateAlarm();
@@ -201,10 +201,6 @@ public class WeatherClient {
     }
 
     private void updateWeatherData() {
-        if (!isAvailable(mContext)) {
-            isRunning = false;
-            return;
-        }
         isRunning = true;
         Cursor c = mContext.getContentResolver().query(WEATHER_URI, PROJECTION_DEFAULT_WEATHER,
                 null, null, null);
@@ -228,28 +224,13 @@ public class WeatherClient {
         } else {
             mWeatherInfo.status = WEATHER_UPDATE_ERROR;
         }
+
         if (DEBUG) Log.d(TAG, mWeatherInfo.toString());
         isRunning = false;
     }
 
     public void addObserver(final WeatherObserver observer) {
         mObserver.add(observer);
-        if (isRunning) {
-            return;
-        }
-        isRunning = true;
-        Thread thread = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                updateWeatherData();
-                try {
-                    observer.onWeatherUpdated(mWeatherInfo);
-                } catch (Exception ignored) {
-                }
-            }
-        });
-        thread.setPriority(Process.THREAD_PRIORITY_BACKGROUND);
-        thread.start();
     }
 
     public void removeObserver(WeatherObserver observer) {
@@ -271,8 +252,29 @@ public class WeatherClient {
         String conditions = "";
         int temperatureMetric = 0;
         int temperatureImperial = 0;
+        final Map<String, Integer> conditionsToDrawableMap = new HashMap<>();
 
         public WeatherInfo() {
+            conditionsToDrawableMap.put("partly-cloudy", R.drawable.weather_partly_cloudy);
+            conditionsToDrawableMap.put("partly-cloudy-night", R.drawable.weather_partly_cloudy_night);
+            conditionsToDrawableMap.put("mostly-cloudy", R.drawable.weather_mostly_cloudy);
+            conditionsToDrawableMap.put("mostly-cloudy-night", R.drawable.weather_mostly_cloudy_night);
+            conditionsToDrawableMap.put("cloudy", R.drawable.weather_cloudy);
+            conditionsToDrawableMap.put("clear-night", R.drawable.weather_clear_night);
+            conditionsToDrawableMap.put("mostly-clear-night", R.drawable.weather_mostly_clear_night);
+            conditionsToDrawableMap.put("sunny", R.drawable.weather_sunny);
+            conditionsToDrawableMap.put("mostly-sunny", R.drawable.weather_mostly_sunny);
+            conditionsToDrawableMap.put("scattered-showers", R.drawable.weather_scattered_showers);
+            conditionsToDrawableMap.put("scattered-showers-night", R.drawable.weather_scattered_showers_night);
+            conditionsToDrawableMap.put("rain", R.drawable.weather_rain);
+            conditionsToDrawableMap.put("windy", R.drawable.weather_windy);
+            conditionsToDrawableMap.put("snow", R.drawable.weather_snow);
+            conditionsToDrawableMap.put("scattered-thunderstorms", R.drawable.weather_isolated_scattered_thunderstorms);
+            conditionsToDrawableMap.put("scattered-thunderstorms-night", R.drawable.weather_isolated_scattered_thunderstorms_night);
+            conditionsToDrawableMap.put("isolated-thunderstorms", R.drawable.weather_isolated_scattered_thunderstorms);
+            conditionsToDrawableMap.put("isolated-thunderstorms-night", R.drawable.weather_isolated_scattered_thunderstorms_night);
+            conditionsToDrawableMap.put("thunderstorms", R.drawable.weather_thunderstorms);
+            conditionsToDrawableMap.put("foggy", R.drawable.weather_foggy);
         }
 
         public int getTemperature(boolean metric) {
@@ -288,31 +290,8 @@ public class WeatherClient {
         }
 
         public int getWeatherConditionImage() {
-            Map<String, Integer> conditions = new HashMap<>();
-            conditions.put("partly-cloudy", R.drawable.weather_partly_cloudy);
-            conditions.put("partly-cloudy-night", R.drawable.weather_partly_cloudy_night);
-            conditions.put("mostly-cloudy", R.drawable.weather_mostly_cloudy);
-            conditions.put("mostly-cloudy-night", R.drawable.weather_mostly_cloudy_night);
-            conditions.put("cloudy", R.drawable.weather_cloudy);
-            conditions.put("clear-night", R.drawable.weather_clear_night);
-            conditions.put("mostly-clear-night", R.drawable.weather_mostly_clear_night);
-            conditions.put("sunny", R.drawable.weather_sunny);
-            conditions.put("mostly-sunny", R.drawable.weather_mostly_sunny);
-            conditions.put("scattered-showers", R.drawable.weather_scattered_showers);
-            conditions.put("scattered-showers-night", R.drawable.weather_scattered_showers_night);
-            conditions.put("rain", R.drawable.weather_rain);
-            conditions.put("windy", R.drawable.weather_windy);
-            conditions.put("snow", R.drawable.weather_snow);
-            conditions.put("scattered-thunderstorms", R.drawable.weather_isolated_scattered_thunderstorms);
-            conditions.put("scattered-thunderstorms-night", R.drawable.weather_isolated_scattered_thunderstorms_night);
-            conditions.put("isolated-thunderstorms", R.drawable.weather_isolated_scattered_thunderstorms);
-            conditions.put("isolated-thunderstorms-night", R.drawable.weather_isolated_scattered_thunderstorms_night);
-            conditions.put("thunderstorms", R.drawable.weather_thunderstorms);
-            conditions.put("foggy", R.drawable.weather_foggy);
-            for (String condition : conditions.keySet()) {
-                if (getConditions().equals(condition)) {
-                    return conditions.get(condition);
-                }
+            if (conditionsToDrawableMap.containsKey(conditions)){
+                return conditionsToDrawableMap.get(conditions);
             }
             return 0;
         }
