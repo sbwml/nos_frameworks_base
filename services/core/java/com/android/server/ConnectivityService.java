@@ -3738,12 +3738,14 @@ public class ConnectivityService extends IConnectivityManager.Stub
     }
 
     /**
-     * Return the information of all ongoing VPNs. This method is used by NetworkStatsService
-     * and not available in ConnectivityManager.
+     * Return the information of all ongoing VPNs.
+     *
+     * <p>This method is used to update NetworkStatsService.
+     *
+     * <p>Must be called on the handler thread.
      */
-    @Override
-    public VpnInfo[] getAllVpnInfo() {
-        enforceConnectivityInternalPermission();
+    private VpnInfo[] getAllVpnInfo() {
+        ensureRunningOnConnectivityServiceThread();
         synchronized (mVpns) {
             if (mLockdownEnabled) {
                 return new VpnInfo[0];
@@ -4165,7 +4167,7 @@ public class ConnectivityService extends IConnectivityManager.Stub
     private BroadcastReceiver mUserIntentReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            final String action = intent.getAction();
+	    final String action = intent.getAction();
             final int userId = intent.getIntExtra(Intent.EXTRA_USER_HANDLE, UserHandle.USER_NULL);
             if (userId == UserHandle.USER_NULL) return;
 
@@ -4654,6 +4656,15 @@ public class ConnectivityService extends IConnectivityManager.Stub
         return nai == getDefaultNetwork();
     }
 
+
+    private void ensureRunningOnConnectivityServiceThread() {
+        if (mHandler.getLooper().getThread() != Thread.currentThread()) {
+            throw new IllegalStateException(
+                    "Not running on ConnectivityService thread: "
+                            + Thread.currentThread().getName());
+        }
+    }
+
     private boolean isDefaultRequest(NetworkRequestInfo nri) {
         return nri.request.requestId == mDefaultRequest.requestId;
     }
@@ -5025,7 +5036,7 @@ public class ConnectivityService extends IConnectivityManager.Stub
     }
 
     public void handleUpdateLinkProperties(NetworkAgentInfo nai, LinkProperties newLp) {
-        if (getNetworkAgentInfoForNetId(nai.network.netId) != nai) {
+	if (getNetworkAgentInfoForNetId(nai.network.netId) != nai) {
             // Ignore updates for disconnected networks
             return;
         }
@@ -5775,6 +5786,7 @@ public class ConnectivityService extends IConnectivityManager.Stub
      * Must be called on the handler thread.
      */
     private Network[] getDefaultNetworks() {
+        ensureRunningOnConnectivityServiceThread();
         ArrayList<Network> defaultNetworks = new ArrayList<>();
         NetworkAgentInfo defaultNetwork = getDefaultNetwork();
         for (NetworkAgentInfo nai : mNetworkAgentInfos.values()) {
@@ -5790,8 +5802,15 @@ public class ConnectivityService extends IConnectivityManager.Stub
      * properties tracked by NetworkStatsService on an active iface has changed.
      */
     private void notifyIfacesChangedForNetworkStats() {
+        ensureRunningOnConnectivityServiceThread();
+        String activeIface = null;
+        LinkProperties activeLinkProperties = getActiveLinkProperties();
+        if (activeLinkProperties != null) {
+            activeIface = activeLinkProperties.getInterfaceName();
+        }
         try {
-            mStatsService.forceUpdateIfaces(getDefaultNetworks());
+            mStatsService.forceUpdateIfaces(
+                    getDefaultNetworks(), getAllVpnInfo(), getAllNetworkState(), activeIface);
         } catch (Exception ignored) {
         }
     }
